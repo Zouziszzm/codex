@@ -1,13 +1,11 @@
 "use client";
 
-import { useEffect, useState, useCallback, Suspense } from "react";
-import { useSearchParams } from "next/navigation";
-import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useState, useCallback, Suspense, useMemo } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
+import { safeInvoke } from "@/lib/tauri";
 import {
   ChevronLeft,
   Info,
-  Calendar,
-  Hash,
   Plus,
   FileText,
   ChevronRight,
@@ -18,29 +16,27 @@ import {
   Zap,
   Brain,
   Flag,
+  Type,
+  Maximize2,
+  Columns,
+  Link as LinkIcon,
+  Unlock,
 } from "lucide-react";
-import Link from "next/link";
 import NocturneEditor from "@/components/diary/editor";
 import { Button } from "@/components/ui/button";
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from "@/components/ui/sheet";
-import { Separator } from "@/components/ui/separator";
-import { Slider } from "@/components/ui/slider";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Label } from "@/components/ui/label";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+} from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
+import { useToast, ToastContainer } from "@/components/ui/toast";
 
 interface DiaryEntry {
   diary_entry_id: string;
@@ -61,32 +57,33 @@ interface DiaryEntry {
 function EditorContent() {
   const searchParams = useSearchParams();
   const id = searchParams.get("id");
+  const router = useRouter();
+  const { toast } = useToast();
+
   const [entry, setEntry] = useState<DiaryEntry | null>(null);
   const [subPages, setSubPages] = useState<DiaryEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [isFuture, setIsFuture] = useState(false);
+  const [isLocked, setIsLocked] = useState(false);
+  const [isFullWidth, setIsFullWidth] = useState(false);
+  const [fontStyle, setFontStyle] = useState<"sans" | "serif" | "mono">("sans");
 
-  const todayStr = "2026-01-03";
+  const todayStr = "2026-01-04";
+  const isFuture = useMemo(() => {
+    if (!entry) return false;
+    return new Date(entry.entry_date) > new Date(todayStr);
+  }, [entry, todayStr]);
 
-  // Fetch Page Data
   const fetchData = useCallback(async () => {
     if (!id) return;
     try {
-      const data = await invoke<DiaryEntry>("get_diary_entry", { id });
+      const data = await safeInvoke<DiaryEntry>("get_diary_entry", { id });
       setEntry(data);
 
-      const children = await invoke<DiaryEntry[]>("get_diary_sub_pages", {
+      const children = await safeInvoke<DiaryEntry[]>("get_diary_sub_pages", {
         parentId: id,
       });
-      setSubPages(children);
-
-      // Rule Check: Is this a future date?
-      const entryDate = new Date(data.entry_date);
-      const today = new Date(todayStr);
-      if (entryDate > today) {
-        setIsFuture(true);
-      }
+      setSubPages(children || []);
     } catch (err) {
       console.error("Failed to fetch diary entry:", err);
     } finally {
@@ -95,19 +92,16 @@ function EditorContent() {
   }, [id]);
 
   useEffect(() => {
-    if (id) {
-      fetchData();
-    }
+    if (id) fetchData();
   }, [id, fetchData]);
 
-  // Handle Save
   const saveEntry = async (updates: Partial<DiaryEntry>) => {
-    if (!entry || isFuture) return;
+    if (!entry || isFuture || isLocked) return;
     const newEntry = { ...entry, ...updates };
 
     try {
       setIsSaving(true);
-      await invoke("update_diary_entry", {
+      await safeInvoke("update_diary_entry", {
         id: newEntry.diary_entry_id,
         title: newEntry.title,
         contentJson: newEntry.content_json,
@@ -126,437 +120,296 @@ function EditorContent() {
     }
   };
 
-  const handleEditorChange = async (jsonContent: string) => {
+  const createSubPage = async () => {
     if (!entry || isFuture) return;
 
-    let words = 0;
-    try {
-      const blocks = JSON.parse(jsonContent);
-      blocks.forEach((b: any) => {
-        if (b.content && Array.isArray(b.content)) {
-          b.content.forEach((c: any) => {
-            if (c.text) words += c.text.trim().split(/\s+/).length;
-          });
-        }
+    const hasEmptySubPage = subPages.some(
+      (page) => !page.word_count || page.word_count < 1
+    );
+    if (hasEmptySubPage) {
+      toast({
+        title: "Finish your current page first!",
+        description:
+          "First finish this u fool before being greedy for more! 😄",
+        variant: "destructive",
       });
-    } catch (e) {}
+      return;
+    }
 
-    await saveEntry({ content_json: jsonContent, word_count: words });
-  };
-
-  const createSubPage = async () => {
-    if (!entry) return;
     try {
-      const newTitle = "Untitled Sub-page";
-      await invoke("create_diary_entry", {
+      await safeInvoke("create_diary_entry", {
         input: {
-          title: newTitle,
+          title: "",
           entry_date: entry.entry_date,
-          content_json: '[{"type":"paragraph","content":[]}]',
+          content_json: "[]",
           parent_page_id: entry.diary_entry_id,
         },
       });
       fetchData();
     } catch (err) {
-      console.error("Failed to create sub-page:", err);
+      console.error("Failed to create sub_page:", err);
     }
   };
 
   if (loading)
     return (
-      <div className="p-20 text-center animate-pulse">
-        Initializing System Stream...
+      <div className="flex flex-col items-center justify-center h-full gap-4 text-zinc-300">
+        <div className="h-8 w-8 animate-spin border-2 border-zinc-200 border-t-zinc-900 rounded-full" />
+        <span className="text-xs font-bold uppercase tracking-widest">
+          Synchronizing Page...
+        </span>
       </div>
     );
+
   if (!entry)
     return (
-      <div className="p-20 text-center text-destructive font-bold">
-        404: IDENTITY NOT FOUND
+      <div className="p-20 text-center text-zinc-400 font-bold">
+        404: Page Not Found
       </div>
     );
 
   return (
-    <div className="flex flex-col h-screen bg-white font-geist">
-      {/* Navigation Bar */}
-      <header className="h-14 border-b flex items-center justify-between px-6 shrink-0 transition-colors bg-zinc-50/30">
-        <div className="flex items-center gap-3 text-sm text-zinc-400 overflow-hidden">
-          <Link
-            href="/diary"
-            className="hover:text-primary flex items-center gap-1.5 shrink-0 transition-colors uppercase font-black text-[10px] tracking-widest"
+    <div className="flex flex-col h-full bg-white transition-all duration-700">
+      {/* Notion-style Toolbar */}
+      <header className="h-10 border-b border-zinc-100 flex items-center justify-between px-4 sticky top-0 bg-white/80 backdrop-blur-sm z-40">
+        <div className="flex items-center gap-1 text-[10px] font-bold uppercase tracking-widest text-zinc-400">
+          <button
+            onClick={() => router.push("/diary")}
+            className="hover:text-zinc-900 flex items-center gap-1 transition-colors"
           >
-            <ChevronLeft className="h-4 w-4" />
-            Archive
-          </Link>
-          <ChevronRight className="h-3 w-3 shrink-0 opacity-40" />
-          <span className="truncate font-black text-zinc-900 uppercase text-[10px] tracking-widest">
-            {entry.title || "Untethered Fragment"}
+            <ChevronLeft className="h-3 w-3" />
+            Journal
+          </button>
+          <ChevronRight className="h-2 w-2 opacity-20" />
+          <span className="text-zinc-900 truncate max-w-[120px]">
+            {entry.title || entry.entry_date}
           </span>
         </div>
 
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-1">
           {isSaving && (
-            <span className="text-[10px] uppercase font-black text-primary animate-pulse tracking-widest bg-primary/5 px-2 py-1 rounded">
-              Syncing...
+            <span className="text-[8px] font-black text-blue-500 mr-2 uppercase tracking-tighter">
+              Saving...
             </span>
           )}
-          {isFuture && (
-            <div className="flex items-center gap-1.5 px-3 py-1 bg-zinc-900 text-white rounded-full text-[10px] font-black tracking-widest uppercase shadow-lg shadow-black/20">
-              <Lock className="h-3 w-3" />
-              Locked System
-            </div>
-          )}
 
-          <Sheet>
-            <SheetTrigger asChild>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
               <Button
                 variant="ghost"
                 size="icon"
-                className="h-10 w-10 hover:bg-zinc-100 rounded-xl"
+                className="h-7 w-7 rounded-md hover:bg-zinc-100"
               >
-                <Info className="h-5 w-5 text-zinc-400" />
+                <Info className="h-3.5 w-3.5 text-zinc-400" />
               </Button>
-            </SheetTrigger>
-            <SheetContent className="sm:max-w-md p-8 overflow-y-auto">
-              <SheetHeader className="mb-10 text-left">
-                <SheetTitle className="text-3xl font-black uppercase tracking-tighter text-zinc-900 leading-none">
-                  Identity <br />{" "}
-                  <span className="text-zinc-400">Metadata</span>
-                </SheetTitle>
-                <SheetDescription className="font-medium text-zinc-500">
-                  Deep system audit and configuration labels.
-                </SheetDescription>
-              </SheetHeader>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-56 font-sans">
+              <DropdownMenuLabel className="text-[10px] uppercase tracking-widest text-zinc-400">
+                Identity
+              </DropdownMenuLabel>
+              <DropdownMenuItem className="flex justify-between">
+                <span className="text-xs">Last Edited</span>
+                <span className="text-xs font-bold">
+                  {new Date(entry.updated_at * 1000).toLocaleTimeString([], {
+                    hour: "2-digit",
+                    minute: "2-digit",
+                  })}
+                </span>
+              </DropdownMenuItem>
+              <DropdownMenuItem className="flex justify-between">
+                <span className="text-xs">Words</span>
+                <span className="text-xs font-bold">{entry.word_count}</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem className="flex justify-between">
+                <span className="text-xs">Pages</span>
+                <span className="text-xs font-bold">
+                  {Math.ceil(entry.word_count / 250) || 1}
+                </span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
 
-              <div className="space-y-10">
-                {/* Status KPI */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-zinc-400 mb-1">
-                      Created
-                    </p>
-                    <p className="text-sm font-bold">
-                      {new Date(entry.created_at * 1000).toLocaleDateString()}
-                    </p>
-                  </div>
-                  <div className="p-4 bg-zinc-50 rounded-2xl border border-zinc-100">
-                    <p className="text-[10px] font-black uppercase tracking-widest text-zinc-400 mb-1">
-                      Words
-                    </p>
-                    <p className="text-sm font-bold">{entry.word_count}</p>
-                  </div>
-                </div>
-
-                <Separator className="bg-zinc-100" />
-
-                {/* Mood & Label */}
-                <div className="space-y-6">
-                  <div className="space-y-2">
-                    <Label className="text-[10px] font-black uppercase tracking-widest text-zinc-400">
-                      Atmosphere Label
-                    </Label>
-                    <Select
-                      disabled={isFuture}
-                      value={entry.mood_label || "Stable"}
-                      onValueChange={(val) => saveEntry({ mood_label: val })}
-                    >
-                      <SelectTrigger className="h-12 bg-zinc-50 border-zinc-100 rounded-xl font-bold uppercase text-[10px] tracking-widest">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent className="bg-zinc-900 text-white border-zinc-800">
-                        <SelectItem
-                          value="Stable"
-                          className="font-bold uppercase text-[10px] tracking-widest"
-                        >
-                          Stable
-                        </SelectItem>
-                        <SelectItem
-                          value="Focused"
-                          className="font-bold uppercase text-[10px] tracking-widest"
-                        >
-                          Focused
-                        </SelectItem>
-                        <SelectItem
-                          value="Tired"
-                          className="font-bold uppercase text-[10px] tracking-widest"
-                        >
-                          Tired
-                        </SelectItem>
-                        <SelectItem
-                          value="Energetic"
-                          className="font-bold uppercase text-[10px] tracking-widest"
-                        >
-                          Energetic
-                        </SelectItem>
-                        <SelectItem
-                          value="Reflective"
-                          className="font-bold uppercase text-[10px] tracking-widest"
-                        >
-                          Reflective
-                        </SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-
-                  <div className="space-y-3">
-                    <div className="flex justify-between items-center">
-                      <Label className="text-[10px] font-black uppercase tracking-widest text-zinc-400">
-                        Vibe Intensity
-                      </Label>
-                      <span className="text-[10px] font-black text-primary uppercase">
-                        {entry.mood_rating || 0}/5
-                      </span>
-                    </div>
-                    <Slider
-                      disabled={isFuture}
-                      value={[entry.mood_rating || 0]}
-                      max={5}
-                      step={1}
-                      onValueChange={(vals) =>
-                        saveEntry({ mood_rating: vals[0] })
-                      }
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-6">
-                  <div className="space-y-3">
-                    <div className="flex justify-between items-center">
-                      <Label className="text-[10px] font-black uppercase tracking-widest text-zinc-400">
-                        Energy Level
-                      </Label>
-                      <span className="text-[10px] font-black text-orange-500 uppercase">
-                        {entry.energy_level || 0}/5
-                      </span>
-                    </div>
-                    <Slider
-                      disabled={isFuture}
-                      value={[entry.energy_level || 0]}
-                      max={5}
-                      step={1}
-                      onValueChange={(vals) =>
-                        saveEntry({ energy_level: vals[0] })
-                      }
-                    />
-                  </div>
-
-                  <div className="space-y-3">
-                    <div className="flex justify-between items-center">
-                      <Label className="text-[10px] font-black uppercase tracking-widest text-zinc-400">
-                        System Stress
-                      </Label>
-                      <span className="text-[10px] font-black text-red-500 uppercase">
-                        {entry.stress_level || 0}/5
-                      </span>
-                    </div>
-                    <Slider
-                      disabled={isFuture}
-                      value={[entry.stress_level || 0]}
-                      max={5}
-                      step={1}
-                      onValueChange={(vals) =>
-                        saveEntry({ stress_level: vals[0] })
-                      }
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-4">
-                  <Label className="text-[10px] font-black uppercase tracking-widest text-zinc-400">
-                    Record Priority
-                  </Label>
-                  <div className="grid grid-cols-3 gap-2">
-                    {[
-                      {
-                        val: 0,
-                        label: "Normal",
-                        color: "bg-zinc-100 text-zinc-600",
-                      },
-                      {
-                        val: 1,
-                        label: "High",
-                        color: "bg-orange-100 text-orange-700",
-                      },
-                      {
-                        val: 2,
-                        label: "Critical",
-                        color: "bg-red-100 text-red-700",
-                      },
-                    ].map((p) => (
-                      <Button
-                        key={p.val}
-                        variant="ghost"
-                        disabled={isFuture}
-                        className={cn(
-                          "h-10 text-[9px] font-black uppercase tracking-widest rounded-xl transition-all",
-                          entry.importance_level === p.val
-                            ? p.color
-                            : "bg-zinc-50 text-zinc-400 hover:bg-zinc-100"
-                        )}
-                        onClick={() => saveEntry({ importance_level: p.val })}
-                      >
-                        {p.label}
-                      </Button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="p-4 bg-zinc-900 rounded-2xl border border-zinc-800 space-y-2">
-                  <div className="flex items-center gap-2 text-primary">
-                    <History className="h-3 w-3" />
-                    <span className="text-[9px] font-black uppercase tracking-widest">
-                      Audit Trail Active
-                    </span>
-                  </div>
-                  <p className="text-[10px] text-zinc-500 leading-relaxed italic">
-                    "Metadata integrity is critical for long-term pattern
-                    recognition. Labels updated at{" "}
-                    {new Date(entry.updated_at * 1000).toLocaleTimeString()}."
-                  </p>
-                </div>
-              </div>
-            </SheetContent>
-          </Sheet>
-          <Button
-            variant="ghost"
-            size="icon"
-            className="h-10 w-10 hover:bg-zinc-100 rounded-xl text-zinc-400"
-          >
-            <MoreVertical className="h-5 w-5" />
-          </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7 rounded-md hover:bg-zinc-100"
+              >
+                <MoreVertical className="h-3.5 w-3.5 text-zinc-400" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-64 font-sans">
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger className="gap-2">
+                  <Type className="h-3.5 w-3.5" />
+                  <span className="text-xs">Font Style</span>
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent>
+                  <DropdownMenuItem
+                    onClick={() => setFontStyle("sans")}
+                    className="text-xs"
+                  >
+                    Default Sans
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => setFontStyle("serif")}
+                    className="text-xs"
+                  >
+                    Classic Serif
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => setFontStyle("mono")}
+                    className="text-xs"
+                  >
+                    Technical Mono
+                  </DropdownMenuItem>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+              <DropdownMenuItem
+                onClick={() => setIsFullWidth(!isFullWidth)}
+                className="gap-2"
+              >
+                {isFullWidth ? (
+                  <Columns className="h-3.5 w-3.5" />
+                ) : (
+                  <Maximize2 className="h-3.5 w-3.5" />
+                )}
+                <span className="text-xs">
+                  {isFullWidth ? "Default Width" : "Full Width"}
+                </span>
+              </DropdownMenuItem>
+              <DropdownMenuItem
+                onClick={() => setIsLocked(!isLocked)}
+                className="gap-2"
+              >
+                {isLocked ? (
+                  <Unlock className="h-3.5 w-3.5" />
+                ) : (
+                  <Lock className="h-3.5 w-3.5" />
+                )}
+                <span className="text-xs">
+                  {isLocked ? "Unlock Page" : "Lock Page"}
+                </span>
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem className="gap-2">
+                <History className="h-3.5 w-3.5" />
+                <span className="text-xs">Version History</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem className="gap-2">
+                <LinkIcon className="h-3.5 w-3.5" />
+                <span className="text-xs">Connections</span>
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </header>
 
-      {/* Editor Surface */}
-      <main className="flex-1 overflow-y-auto overflow-x-hidden selection:bg-primary/10 bg-white">
-        <div className="max-w-4xl mx-auto py-24 px-16 space-y-16">
-          {/* Page Header */}
-          <div className="space-y-6">
-            <div className="flex items-center gap-3">
-              <div className="px-3 py-1 bg-zinc-100 rounded-full text-[10px] font-black uppercase text-zinc-400 tracking-widest">
-                {entry.entry_date}
-              </div>
-              <div className="h-px bg-zinc-100 flex-1" />
-              <div className="text-[10px] font-black text-zinc-300 uppercase tracking-widest">
-                Record ID: {entry.diary_entry_id.split("-")[0]}
-              </div>
-            </div>
-
+      {/* Surface Area */}
+      <main
+        className={cn(
+          "flex-1 overflow-y-auto pt-16 pb-32 transition-all duration-500",
+          fontStyle === "serif"
+            ? "font-serif"
+            : fontStyle === "mono"
+            ? "font-mono"
+            : "font-sans"
+        )}
+      >
+        <div
+          className={cn(
+            "mx-auto px-6 transition-all duration-500",
+            isFullWidth ? "max-w-none" : "max-w-3xl"
+          )}
+        >
+          {/* Page Title */}
+          <div className="mb-10 group">
             <input
-              className="w-full text-7xl font-black tracking-tighter outline-none bg-transparent placeholder:text-zinc-100 text-zinc-900 leading-[0.9] uppercase"
-              placeholder="Entry Point Title"
-              defaultValue={entry.title || ""}
-              disabled={isFuture}
-              onBlur={(e) => {
-                if (isFuture) return;
-                saveEntry({ title: e.target.value });
-              }}
+              value={entry.title || ""}
+              onChange={(e) => setEntry({ ...entry, title: e.target.value })}
+              onBlur={(e) => saveEntry({ title: e.target.value })}
+              placeholder="Untitled"
+              className="w-full text-5xl font-bold tracking-tight outline-none placeholder:text-zinc-100 text-zinc-900 bg-transparent"
+              disabled={isLocked || isFuture}
             />
-          </div>
-
-          {/* Quick Context Tags */}
-          <div className="flex gap-4 border-b border-zinc-50 pb-10">
-            <div className="flex items-center gap-2 px-4 py-2 bg-zinc-50 rounded-2xl border border-zinc-100">
-              <Smile className="h-4 w-4 text-primary" />
-              <span className="text-xs font-bold uppercase tracking-widest text-zinc-500">
-                {entry.mood_label || "Stable"}
-              </span>
-            </div>
-            <div className="flex items-center gap-2 px-4 py-2 bg-zinc-50 rounded-2xl border border-zinc-100">
-              <Zap className="h-4 w-4 text-orange-500" />
-              <span className="text-xs font-bold uppercase tracking-widest text-zinc-500">
-                E: {entry.energy_level || 0}
-              </span>
-            </div>
-            <div className="flex items-center gap-2 px-4 py-2 bg-zinc-50 rounded-2xl border border-zinc-100">
-              <Brain className="h-4 w-4 text-red-500" />
-              <span className="text-xs font-bold uppercase tracking-widest text-zinc-500">
-                S: {entry.stress_level || 0}
-              </span>
-            </div>
-            <div className="flex items-center gap-2 px-4 py-2 bg-zinc-50 rounded-2xl border border-zinc-100">
-              <Flag
-                className={cn(
-                  "h-4 w-4",
-                  entry.importance_level === 2
-                    ? "text-red-500"
-                    : entry.importance_level === 1
-                    ? "text-orange-500"
-                    : "text-zinc-400"
-                )}
-              />
-              <span className="text-xs font-bold uppercase tracking-widest text-zinc-500">
-                Priority
-              </span>
+            <div className="flex items-center gap-4 mt-4 text-[10px] font-bold text-zinc-300 uppercase tracking-widest">
+              <div className="flex items-center gap-1.5">
+                <Smile className="h-3 w-3" />
+                {entry.mood_label || "Natural"}
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Zap className="h-3 w-3" />
+                {entry.energy_level || 5}/10
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Brain className="h-3 w-3" />
+                S: {entry.stress_level || 2}
+              </div>
             </div>
           </div>
 
-          {/* Editor */}
-          <div className="-mx-16 min-h-[500px]">
+          {/* Editor Core */}
+          <div
+            className={cn(
+              "min-h-[60vh]",
+              (isLocked || isFuture) && "opacity-60 pointer-events-none"
+            )}
+          >
             <NocturneEditor
               initialContent={entry.content_json}
-              onChange={handleEditorChange}
-              editable={!isFuture}
+              onChange={(content) =>
+                saveEntry({
+                  content_json: content,
+                  word_count: content.split(" ").length,
+                })
+              }
+              editable={!isLocked && !isFuture}
             />
           </div>
 
-          {/* Sub-pages section */}
-          <div className="pt-20 border-t border-zinc-100 space-y-8">
-            <div className="flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-black uppercase tracking-[0.2em] text-zinc-400">
-                  Nested Chronicles
-                </h3>
-                <p className="text-xs font-medium text-zinc-500 mt-1">
-                  Deep linking related sub-pages for this entry.
-                </p>
-              </div>
+          {/* Nested Hierarchy */}
+          <div className="mt-20 pt-10 border-t border-zinc-50">
+            <div className="flex items-center justify-between mb-6">
+              <h3 className="text-[10px] font-bold uppercase tracking-widest text-zinc-400">
+                Child Nodes
+              </h3>
               <Button
-                variant="outline"
+                variant="ghost"
                 size="sm"
                 onClick={createSubPage}
-                className="h-10 px-6 text-[10px] font-black uppercase tracking-widest rounded-xl border-zinc-200 hover:bg-zinc-50 gap-2"
-                disabled={isFuture}
+                className="h-6 px-2 text-[10px] font-bold uppercase tracking-widest hover:bg-zinc-50 gap-1"
               >
-                <Plus className="h-4 w-4" />
-                Add Nested Page
+                <Plus className="h-3 w-3" />
+                New Child
               </Button>
             </div>
 
-            <div className="grid gap-3">
-              {subPages.length === 0 ? (
-                <div className="flex flex-col items-center gap-4 py-12 bg-zinc-50 border border-dashed border-zinc-200 rounded-3xl opacity-40">
-                  <FileText className="h-8 w-8 text-zinc-300" />
-                  <div className="text-[10px] font-black uppercase tracking-[0.3em] text-zinc-400 italic text-center">
-                    No hierarchy established <br /> for this entry point.
-                  </div>
-                </div>
-              ) : (
-                subPages.map((page) => (
-                  <Link
-                    key={page.diary_entry_id}
-                    href={`/diary/editor?id=${page.diary_entry_id}`}
-                    className="flex items-center gap-6 p-6 rounded-[1.5rem] border border-zinc-100 hover:border-primary/20 hover:bg-primary/5 group transition-all"
-                  >
-                    <div className="h-10 w-10 rounded-xl bg-white border border-zinc-200 flex items-center justify-center shadow-sm group-hover:border-primary/20 transition-colors">
-                      <FileText className="h-5 w-5 text-zinc-400 group-hover:text-primary transition-colors" />
-                    </div>
-                    <div className="flex-1">
-                      <span className="text-lg font-black tracking-tight text-zinc-900 uppercase group-hover:text-primary transition-colors">
-                        {page.title || "Untitled Sub-page"}
-                      </span>
-                      <p className="text-[10px] font-black uppercase text-zinc-400 tracking-widest mt-1">
-                        Captured at{" "}
-                        {new Date(page.created_at * 1000).toLocaleTimeString()}
-                      </p>
-                    </div>
-                    <ChevronRight className="h-6 w-6 text-zinc-200 group-hover:text-primary transition-all group-hover:translate-x-1" />
-                  </Link>
-                ))
+            <div className="grid gap-1">
+              {subPages.map((page) => (
+                <button
+                  key={page.diary_entry_id}
+                  onClick={() =>
+                    router.push(`/diary/editor?id=${page.diary_entry_id}`)
+                  }
+                  className="flex items-center gap-3 p-2 rounded-lg hover:bg-zinc-50 group text-left transition-all"
+                >
+                  <FileText className="h-4 w-4 text-zinc-300 group-hover:text-zinc-900 transition-colors" />
+                  <span className="text-sm font-medium text-zinc-600 group-hover:text-zinc-900 transition-colors">
+                    {page.title || "Untitled Sub-page"}
+                  </span>
+                </button>
+              ))}
+              {subPages.length === 0 && (
+                <p className="text-[10px] text-zinc-300 font-medium uppercase tracking-tighter">
+                  No hierarchical nodes established.
+                </p>
               )}
             </div>
           </div>
         </div>
       </main>
+      <ToastContainer toasts={[]} onRemove={() => {}} />
     </div>
   );
 }
@@ -565,8 +418,8 @@ export default function DiaryEntryPage() {
   return (
     <Suspense
       fallback={
-        <div className="p-20 text-center animate-pulse font-black text-zinc-300 uppercase tracking-widest">
-          Warping to stream...
+        <div className="p-20 text-center animate-pulse">
+          Waking up system...
         </div>
       }
     >

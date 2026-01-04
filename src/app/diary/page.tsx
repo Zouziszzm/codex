@@ -1,23 +1,18 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useState, useMemo, useCallback } from "react";
+import { safeInvoke } from "@/lib/tauri";
 import { useRouter } from "next/navigation";
 import {
-  Plus,
-  BookOpen,
+  Tag as TagIcon,
+  Target,
+  Briefcase,
   Search,
+  Calendar,
   Filter,
   ArrowUpRight,
-  Clock,
-  Zap,
-  Smile,
+  BookOpen,
   ChevronRight,
-  Database,
-  Lock,
-  History,
-  Tag,
-  CalendarDays,
 } from "lucide-react";
 import {
   Table,
@@ -27,24 +22,8 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from "@/components/ui/sheet";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -52,7 +31,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { cn } from "@/lib/utils";
+import { useToast, ToastContainer } from "@/components/ui/toast";
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+  Cell,
+} from "recharts";
 
 interface DiaryEntry {
   diary_entry_id: string;
@@ -60,363 +49,443 @@ interface DiaryEntry {
   title: string | null;
   word_count: number;
   mood_label: string | null;
-  mood_rating: number | null;
   importance_level: number;
-  updated_at: number;
+  tags?: string[];
+  linked_task_ids?: string[];
+  linked_goal_ids?: string[];
+  linked_job_ids?: string[];
 }
 
 export default function DiaryPage() {
   const router = useRouter();
+  const { toast, toasts, removeToast } = useToast();
   const [entries, setEntries] = useState<DiaryEntry[]>([]);
   const [loading, setLoading] = useState(true);
-  const [isInitializing, setIsInitializing] = useState(false);
 
-  // States for filters
+  // Filter states
   const [searchQuery, setSearchQuery] = useState("");
-  const [moodFilter, setMoodFilter] = useState("all");
-  const [importanceFilter, setImportanceFilter] = useState("all");
-  const [dateSort, setDateSort] = useState("desc");
+  const [monthFilter, setMonthFilter] = useState("all");
+  const [tagFilter, setTagFilter] = useState("all");
 
-  const todayStr = "2026-01-03"; // System current date
+  const todayStr = "2026-01-04";
+  const today = useMemo(() => new Date(todayStr), [todayStr]);
+  const isLeapYear = (year: number) =>
+    (year % 4 === 0 && year % 100 !== 0) || year % 400 === 0;
+  const totalDays = isLeapYear(2026) ? 366 : 365;
 
-  const fetchEntries = async () => {
+  const dayOfYear = useMemo(() => {
+    const start = new Date(today.getFullYear(), 0, 0);
+    const diff = today.getTime() - start.getTime();
+    return Math.floor(diff / (1000 * 60 * 60 * 24));
+  }, [today]);
+
+  const fetchEntries = useCallback(async () => {
     try {
-      const data = await invoke<DiaryEntry[]>("get_diary_entries");
-      setEntries(data);
+      const data = await safeInvoke<DiaryEntry[]>("get_diary_entries");
+      setEntries(data || []);
     } catch (err) {
       console.error("Failed to fetch entries:", err);
     } finally {
       setLoading(false);
     }
-  };
-
-  const setupSystem = async () => {
-    setIsInitializing(true);
-    try {
-      await invoke("setup_diary");
-      await fetchEntries();
-    } catch (err) {
-      console.error("Setup failed:", err);
-    } finally {
-      setIsInitializing(false);
-    }
-  };
-
-  useEffect(() => {
-    setupSystem();
   }, []);
 
-  // Functional Filtering
-  const filteredEntries = useMemo(() => {
-    let result = entries.filter((entry) => {
-      const matchesSearch =
-        (entry.title || "").toLowerCase().includes(searchQuery.toLowerCase()) ||
-        entry.entry_date.includes(searchQuery);
-      const matchesMood =
-        moodFilter === "all" || entry.mood_label === moodFilter;
-      const matchesImportance =
-        importanceFilter === "all" ||
-        entry.importance_level.toString() === importanceFilter;
+  useEffect(() => {
+    fetchEntries();
+  }, [fetchEntries]);
 
-      return matchesSearch && matchesMood && matchesImportance;
+  const analytics = useMemo(() => {
+    const entriesWithContent = entries.filter((e) => e.word_count > 0);
+
+    // Tag distribution analytics
+    const tagStats: Record<string, { count: number; totalWords: number }> = {};
+    entries.forEach((entry) => {
+      entry.tags?.forEach((tag) => {
+        if (!tagStats[tag]) tagStats[tag] = { count: 0, totalWords: 0 };
+        tagStats[tag].count++;
+        tagStats[tag].totalWords += entry.word_count;
+      });
     });
 
-    result.sort((a, b) => {
-      const timeA = new Date(a.entry_date).getTime();
-      const timeB = new Date(b.entry_date).getTime();
-      return dateSort === "desc" ? timeB - timeA : timeA - timeB;
-    });
+    const chartData = Object.entries(tagStats)
+      .map(([name, stats]) => ({
+        name,
+        count: stats.count,
+        avgLength: Math.round(stats.totalWords / stats.count),
+      }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 8);
 
-    return result;
-  }, [entries, searchQuery, moodFilter, importanceFilter, dateSort]);
-
-  // Insights
-  const stats = useMemo(() => {
-    const totalWords = entries.reduce((acc, curr) => acc + curr.word_count, 0);
-    const completedCount = entries.filter((e) => e.word_count > 0).length;
-    const avgWords =
-      completedCount > 0 ? (totalWords / completedCount).toFixed(0) : 0;
-
-    return { totalWords, completedCount, avgWords };
+    return {
+      entriesCount: entriesWithContent.length,
+      chartData,
+      totalEntries: entries.length,
+    };
   }, [entries]);
 
-  const handleRowClick = (id: string) => {
-    router.push(`/diary/editor?id=${id}`);
-  };
+  const filteredEntries = useMemo(() => {
+    return [...entries]
+      .filter((entry) => {
+        const entryDate = new Date(entry.entry_date);
+        const matchesSearch =
+          (entry.title || "")
+            .toLowerCase()
+            .includes(searchQuery.toLowerCase()) ||
+          entry.entry_date.includes(searchQuery);
+        const matchesMonth =
+          monthFilter === "all" ||
+          (entryDate.getMonth() + 1).toString() === monthFilter;
+        const matchesTag =
+          tagFilter === "all" || (entry.tags && entry.tags.includes(tagFilter));
+        return matchesSearch && matchesMonth && matchesTag;
+      })
+      .sort(
+        (a, b) =>
+          new Date(b.entry_date).getTime() - new Date(a.entry_date).getTime()
+      );
+  }, [entries, searchQuery, monthFilter, tagFilter]);
 
   return (
-    <div className="p-10 space-y-10 max-w-7xl mx-auto font-geist">
-      {/* Header */}
-      <div className="flex flex-col md:flex-row justify-between items-start md:items-end gap-6">
-        <div className="space-y-4">
-          <div className="flex items-center gap-2 px-3 py-1 bg-primary/10 rounded-full w-fit">
-            <Database className="h-3 w-3 text-primary" />
-            <span className="text-[10px] font-black uppercase tracking-widest text-primary">
-              System Calendar Active
+    <div className="space-y-10 animate-in fade-in duration-700">
+      {/* Notion-style Header */}
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+        <div className="flex flex-col gap-2">
+          <div className="flex items-center gap-2 text-zinc-400">
+            <BookOpen className="h-4 w-4" />
+            <span className="text-xs font-medium uppercase tracking-widest">
+              Historical Logs
             </span>
           </div>
-          <h1 className="text-5xl font-black tracking-tighter text-zinc-900 uppercase italic">
-            Diary <span className="text-zinc-400 not-italic">Archive</span>
+          <h1 className="text-4xl font-bold tracking-tight text-zinc-900">
+            Diary
           </h1>
-          <p className="text-zinc-500 text-lg font-medium max-w-md">
-            The complete 2026 chronological record. Syncing through {todayStr}.
-          </p>
         </div>
+        <button
+          onClick={async () => {
+            try {
+              const now = new Date();
+              const dateStr = now.toISOString().split("T")[0];
+              const newEntry = await safeInvoke<DiaryEntry>(
+                "create_diary_entry",
+                {
+                  input: {
+                    entry_date: dateStr,
+                    title: "Draft Entry",
+                    content_json: JSON.stringify({
+                      type: "page",
+                      content: [{ type: "paragraph", content: [] }],
+                    }),
+                    parent_page_id: null,
+                  },
+                }
+              );
+              if (newEntry) {
+                toast({
+                  title: "Entry Created",
+                  description: "Redirecting to editor...",
+                  variant: "success",
+                });
+                router.push(`/diary/editor?id=${newEntry.diary_entry_id}`);
+              } else {
+                toast({
+                  title: "Action Restricted",
+                  description:
+                    "Data modification requires the Tauri application.",
+                  variant: "destructive",
+                });
+              }
+            } catch (err: unknown) {
+              const errorMessage =
+                err instanceof Error ? err.message : String(err);
+              toast({
+                title: "Creation Error",
+                description: errorMessage,
+                variant: "destructive",
+              });
+            }
+          }}
+          className="h-10 px-4 bg-zinc-900 text-white rounded-lg text-sm font-semibold hover:bg-zinc-800 transition-colors flex items-center justify-center gap-2"
+        >
+          <BookOpen className="h-4 w-4" />
+          New Entry
+        </button>
+      </div>
+      <ToastContainer toasts={toasts} onRemove={removeToast} />
 
-        <div className="flex items-center gap-4">
-          <div className="text-right pr-4 border-r">
-            <p className="text-[10px] font-black uppercase tracking-widest text-zinc-400">
-              Sync Status
-            </p>
-            <p className="text-xl font-black text-green-600">LIVE</p>
+      {/* Analytics & Progress Section */}
+      <div className="grid gap-8 lg:grid-cols-12">
+        <div className="lg:col-span-12">
+          <div className="p-6 bg-zinc-50/50 rounded-2xl border border-zinc-100 flex flex-col md:flex-row items-center justify-between gap-8">
+            <div className="space-y-1 text-center md:text-left">
+              <h3 className="text-sm font-semibold text-zinc-400 uppercase tracking-wider">
+                Year Progress
+              </h3>
+              <div className="text-3xl font-bold tracking-tight">
+                {dayOfYear}/{totalDays}{" "}
+                <span className="text-zinc-300 font-light">day</span> |{" "}
+                {analytics.entriesCount}/{totalDays}{" "}
+                <span className="text-zinc-300 font-light">entries</span>
+              </div>
+            </div>
+
+            <div className="flex-1 max-w-md w-full px-4">
+              <div className="relative h-3 bg-zinc-200 rounded-full overflow-hidden">
+                <div
+                  className="absolute inset-y-0 left-0 bg-zinc-900 transition-all duration-1000 ease-out z-10"
+                  style={{ width: `${(dayOfYear / totalDays) * 100}%` }}
+                />
+                <div
+                  className="absolute inset-y-0 left-0 bg-blue-500 transition-all duration-1000 ease-out z-20 opacity-60"
+                  style={{
+                    width: `${(analytics.entriesCount / totalDays) * 100}%`,
+                  }}
+                />
+              </div>
+              <div className="flex justify-between mt-2 text-[10px] font-bold uppercase tracking-widest text-zinc-400">
+                <span>Elapsed</span>
+                <span className="text-blue-500 italic">Captured</span>
+              </div>
+            </div>
+
+            <div className="text-center md:text-right">
+              <div className="text-3xl font-bold">{totalDays - dayOfYear}</div>
+              <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">
+                Days Remaining
+              </div>
+            </div>
           </div>
-          <Button
-            variant="outline"
-            className="h-12 px-6 rounded-xl border-zinc-200 hover:bg-zinc-50 transition-all font-black uppercase tracking-widest text-[10px] gap-2"
-            onClick={setupSystem}
-            disabled={isInitializing}
-          >
-            {isInitializing ? (
-              <div className="h-4 w-4 border-2 border-primary border-t-transparent animate-spin rounded-full" />
-            ) : (
-              <History className="h-4 w-4" />
-            )}
-            Force Re-Sync
-          </Button>
         </div>
+
+        {/* Tag Analytics Chart */}
+        <Card className="lg:col-span-12 border-none shadow-none bg-transparent">
+          <CardHeader className="px-0">
+            <CardTitle className="text-xl font-semibold flex items-center justify-between">
+              Tag Distribution & Length
+              <span className="text-xs font-normal text-zinc-400">
+                Comparing frequency vs average word count
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-0 h-[240px]">
+            {analytics.chartData.length > 0 ? (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={analytics.chartData}>
+                  <CartesianGrid
+                    strokeDasharray="3 3"
+                    vertical={false}
+                    stroke="#f0f0f0"
+                  />
+                  <XAxis
+                    dataKey="name"
+                    axisLine={false}
+                    tickLine={false}
+                    tick={{ fontSize: 11, fill: "#a1a1aa" }}
+                  />
+                  <YAxis
+                    axisLine={false}
+                    tickLine={false}
+                    tick={{ fontSize: 11, fill: "#a1a1aa" }}
+                  />
+                  <Tooltip
+                    cursor={{ fill: "transparent" }}
+                    contentStyle={{
+                      borderRadius: "8px",
+                      border: "none",
+                      boxShadow: "0 10px 15px -3px rgb(0 0 0 / 0.1)",
+                    }}
+                  />
+                  <Bar
+                    dataKey="avgLength"
+                    name="Avg Words"
+                    radius={[4, 4, 0, 0]}
+                    barSize={40}
+                  >
+                    {analytics.chartData.map((_, index) => (
+                      <Cell
+                        key={`cell-${index}`}
+                        fill="#18181b"
+                        fillOpacity={
+                          0.05 + 0.9 * (index / analytics.chartData.length)
+                        }
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full flex items-center justify-center border-2 border-dashed border-zinc-100 rounded-2xl text-zinc-300 text-sm italic">
+                Insufficient tag data for visualization
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
 
-      {/* Analytics */}
-      <div className="grid gap-6 md:grid-cols-4">
-        {[
-          {
-            label: "Total Capacity",
-            val: entries.length,
-            icon: CalendarDays,
-            color: "text-zinc-400",
-            desc: "Days in system",
-          },
-          {
-            label: "Active Pages",
-            val: stats.completedCount,
-            icon: Zap,
-            color: "text-orange-500",
-            desc: "Entries written",
-          },
-          {
-            label: "Volume",
-            val: stats.totalWords.toLocaleString(),
-            icon: History,
-            color: "text-blue-500",
-            desc: "Words logged",
-          },
-          {
-            label: "Avg Depth",
-            val: stats.avgWords,
-            icon: Smile,
-            color: "text-primary",
-            desc: "Words per page",
-          },
-        ].map((kpi, i) => (
-          <Card
-            key={i}
-            className="border-none bg-zinc-50 shadow-sm relative overflow-hidden"
-          >
-            <CardHeader className="pb-2">
-              <CardDescription className="text-[10px] font-black uppercase tracking-widest text-zinc-400">
-                {kpi.label}
-              </CardDescription>
-              <CardTitle className="text-3xl font-black">{kpi.val}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-widest mt-1">
-                {kpi.desc}
-              </p>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
-
-      {/* Filtering Engine */}
-      <div className="flex flex-col md:flex-row gap-4 p-6 bg-zinc-900 rounded-3xl text-white">
-        <div className="relative flex-1">
-          <Search className="absolute left-4 top-1/2 -translate-y-1/2 h-5 w-5 text-zinc-500" />
+      {/* Workspace Filters */}
+      <div className="flex flex-col md:flex-row items-center gap-4 pt-4 border-t border-zinc-100">
+        <div className="relative flex-1 w-full">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-zinc-400" />
           <Input
-            placeholder="Search dates, IDs, or titles..."
-            className="pl-12 h-14 bg-zinc-800 border-none text-white placeholder:text-zinc-500 rounded-2xl focus-visible:ring-primary/50"
+            placeholder="Search journal..."
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
+            className="pl-10 h-10 bg-zinc-50/50 border-zinc-100 focus:bg-white transition-all shadow-none"
           />
         </div>
-
-        <div className="flex gap-2">
-          <Select value={moodFilter} onValueChange={setMoodFilter}>
-            <SelectTrigger className="w-40 h-14 bg-zinc-800 border-none rounded-2xl font-black uppercase text-[10px] tracking-widest">
-              <SelectValue placeholder="Mood" />
+        <div className="flex items-center gap-2 w-full md:w-auto">
+          <Select value={monthFilter} onValueChange={setMonthFilter}>
+            <SelectTrigger className="w-full md:w-40 h-10 border-zinc-100 bg-zinc-50/50">
+              <SelectValue placeholder="Month" />
             </SelectTrigger>
-            <SelectContent className="bg-zinc-900 text-white border-zinc-800">
-              <SelectItem value="all">All Moods</SelectItem>
-              <SelectItem value="Stable">Stable</SelectItem>
-              <SelectItem value="Focused">Focused</SelectItem>
-              <SelectItem value="Tired">Tired</SelectItem>
-              <SelectItem value="Energetic">Energetic</SelectItem>
+            <SelectContent>
+              <SelectItem value="all">All Months</SelectItem>
+              {Array.from({ length: 12 }, (_, i) => (
+                <SelectItem key={i + 1} value={(i + 1).toString()}>
+                  {new Date(2026, i).toLocaleString("default", {
+                    month: "long",
+                  })}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
-
-          <Select value={importanceFilter} onValueChange={setImportanceFilter}>
-            <SelectTrigger className="w-40 h-14 bg-zinc-800 border-none rounded-2xl font-black uppercase text-[10px] tracking-widest">
-              <SelectValue placeholder="Priority" />
+          <Select value={tagFilter} onValueChange={setTagFilter}>
+            <SelectTrigger className="w-full md:w-40 h-10 border-zinc-100 bg-zinc-50/50">
+              <SelectValue placeholder="Tag" />
             </SelectTrigger>
-            <SelectContent className="bg-zinc-900 text-white border-zinc-800">
-              <SelectItem value="all">All Priority</SelectItem>
-              <SelectItem value="0">Normal</SelectItem>
-              <SelectItem value="1">High</SelectItem>
-              <SelectItem value="2">Critical</SelectItem>
+            <SelectContent>
+              <SelectItem value="all">All Tags</SelectItem>
+              {/* Actual unique tags should be populated here */}
             </SelectContent>
           </Select>
-
-          <Button
-            variant="ghost"
-            className="h-14 w-14 rounded-2xl bg-zinc-800 hover:bg-zinc-700 hover:text-white"
-            onClick={() => setDateSort(dateSort === "desc" ? "asc" : "desc")}
-          >
-            <Filter
-              className={cn(
-                "h-6 w-6 transition-transform",
-                dateSort === "asc" && "rotate-180"
-              )}
-            />
-          </Button>
         </div>
       </div>
 
-      {/* Entry List */}
-      <div className="rounded-[2.5rem] border border-zinc-100 bg-white shadow-2xl shadow-zinc-200/50 overflow-hidden">
+      {/* Entries Table */}
+      <div className="border rounded-xl border-zinc-100 overflow-hidden shadow-sm">
         <Table>
           <TableHeader className="bg-zinc-50/50">
-            <TableRow className="hover:bg-transparent border-zinc-100">
-              <TableHead className="w-[180px] font-black text-[10px] uppercase tracking-[0.2em] text-zinc-400 pl-10 h-16">
-                Entry Point
+            <TableRow className="hover:bg-transparent">
+              <TableHead className="w-12 text-center text-[10px] font-bold uppercase tracking-widest">
+                No
               </TableHead>
-              <TableHead className="font-black text-[10px] uppercase tracking-[0.2em] text-zinc-400">
-                System Identity
+              <TableHead className="text-[10px] font-bold uppercase tracking-widest">
+                Title/Date
               </TableHead>
-              <TableHead className="font-black text-[10px] uppercase tracking-[0.2em] text-zinc-400">
-                Metrics
+              <TableHead className="text-[10px] font-bold uppercase tracking-widest">
+                Day
               </TableHead>
-              <TableHead className="font-black text-[10px] uppercase tracking-[0.2em] text-zinc-400">
-                Status
+              <TableHead className="text-[10px] font-bold uppercase tracking-widest">
+                Pages
               </TableHead>
-              <TableHead className="w-[100px]"></TableHead>
+              <TableHead className="text-[10px] font-bold uppercase tracking-widest">
+                Tags
+              </TableHead>
+              <TableHead className="text-[10px] font-bold uppercase tracking-widest">
+                Action
+              </TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading ? (
-              Array.from({ length: 10 }).map((_, i) => (
-                <TableRow key={i} className="h-24">
-                  <TableCell colSpan={5} className="px-10">
-                    <div className="h-4 bg-zinc-50 rounded animate-pulse w-full" />
-                  </TableCell>
-                </TableRow>
-              ))
-            ) : filteredEntries.length === 0 ? (
-              <TableRow className="h-96">
+              <TableRow>
                 <TableCell
-                  colSpan={5}
-                  className="text-center font-black uppercase text-zinc-300 tracking-[0.5em]"
+                  colSpan={6}
+                  className="h-32 text-center text-zinc-300 italic"
                 >
-                  <div className="flex flex-col items-center gap-4">
-                    <Database className="h-12 w-12 opacity-10" />
-                    Query Result: Empty
-                  </div>
+                  Retrieving diary stream...
+                </TableCell>
+              </TableRow>
+            ) : filteredEntries.length === 0 ? (
+              <TableRow>
+                <TableCell
+                  colSpan={6}
+                  className="h-32 text-center text-zinc-300 italic"
+                >
+                  No records found in this view.
                 </TableCell>
               </TableRow>
             ) : (
-              filteredEntries.map((entry) => {
-                const isFuture =
-                  new Date(entry.entry_date) > new Date(todayStr);
+              filteredEntries.map((entry, index) => {
+                const date = new Date(entry.entry_date);
+                const dayOfYearNum = Math.ceil(
+                  (date.getTime() -
+                    new Date(date.getFullYear(), 0, 0).getTime()) /
+                    (1000 * 60 * 60 * 24)
+                );
+                const pages = Math.ceil(entry.word_count / 250) || 1;
+
                 return (
                   <TableRow
                     key={entry.diary_entry_id}
-                    className="group h-24 hover:bg-zinc-50/80 cursor-pointer transition-all border-zinc-100"
-                    onClick={() => handleRowClick(entry.diary_entry_id)}
+                    className="group cursor-pointer hover:bg-zinc-50/80 transition-colors"
+                    onClick={() =>
+                      router.push(`/diary/editor?id=${entry.diary_entry_id}`)
+                    }
                   >
-                    <TableCell className="pl-10">
-                      <div className="flex items-center gap-4">
-                        <div
-                          className={cn(
-                            "h-10 w-10 rounded-xl flex items-center justify-center border transition-colors",
-                            isFuture
-                              ? "bg-zinc-50 border-zinc-100"
-                              : "bg-primary/5 border-primary/10 group-hover:bg-primary group-hover:text-white group-hover:border-primary"
-                          )}
-                        >
-                          <CalendarDays className="h-5 w-5" />
-                        </div>
-                        <div className="font-mono text-[11px] font-black uppercase text-zinc-400">
-                          {entry.entry_date}
-                        </div>
-                      </div>
+                    <TableCell className="text-center font-mono text-xs text-zinc-400">
+                      {index + 1}
                     </TableCell>
                     <TableCell>
-                      <div className="space-y-1">
-                        <div
-                          className={cn(
-                            "font-black text-xl tracking-tighter truncate max-w-md transition-colors",
-                            isFuture
-                              ? "text-zinc-300"
-                              : "text-zinc-900 group-hover:text-primary"
-                          )}
-                        >
-                          {entry.title || "Untethered Fragment"}
-                        </div>
-                        <div className="flex items-center gap-3">
-                          {entry.mood_label && (
-                            <span className="flex items-center gap-1.5 px-2 py-0.5 bg-zinc-100 rounded-md text-[9px] font-black uppercase text-zinc-500 tracking-widest">
-                              <Smile className="h-3 w-3" />
-                              {entry.mood_label}
+                      <div className="flex flex-col">
+                        <span className="font-semibold text-zinc-900 group-hover:text-black">
+                          {entry.title ||
+                            date.toLocaleDateString(undefined, {
+                              month: "short",
+                              day: "numeric",
+                              year: "numeric",
+                            })}
+                        </span>
+                        <span className="text-[10px] text-zinc-400 uppercase tracking-tighter">
+                          {date.toLocaleDateString(undefined, {
+                            weekday: "long",
+                          })}
+                        </span>
+                      </div>
+                    </TableCell>
+                    <TableCell className="font-medium text-zinc-600">
+                      {dayOfYearNum}
+                    </TableCell>
+                    <TableCell className="font-medium text-zinc-600">
+                      {pages}
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-1">
+                        {entry.tags && entry.tags.length > 0 ? (
+                          entry.tags.map((tag, i) => (
+                            <span
+                              key={i}
+                              className="px-1.5 py-0.5 bg-zinc-100 text-zinc-600 rounded text-[10px] font-medium"
+                            >
+                              #{tag}
                             </span>
+                          ))
+                        ) : (
+                          <span className="text-zinc-300 font-light italic text-xs">
+                            No tags
+                          </span>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-2">
+                        {(entry.linked_goal_ids?.length || 0) > 0 && (
+                          <Target className="h-3.5 w-3.5 text-purple-400" />
+                        )}
+                        {(entry.linked_task_ids?.length || 0) > 0 && (
+                          <Calendar className="h-3.5 w-3.5 text-blue-400" />
+                        )}
+                        {(entry.linked_job_ids?.length || 0) > 0 && (
+                          <Briefcase className="h-3.5 w-3.5 text-orange-400" />
+                        )}
+                        {!entry.linked_goal_ids?.length &&
+                          !entry.linked_task_ids?.length &&
+                          !entry.linked_job_ids?.length && (
+                            <span className="text-zinc-200">—</span>
                           )}
-                          <span className="text-[9px] font-black uppercase text-zinc-400 tracking-widest">
-                            {entry.word_count} Words logged
-                          </span>
-                        </div>
                       </div>
                     </TableCell>
-                    <TableCell>
-                      <div className="flex gap-1.5">
-                        {Array.from({ length: 5 }).map((_, i) => (
-                          <div
-                            key={i}
-                            className={cn(
-                              "h-1 w-4 rounded-full transition-all duration-500",
-                              i < (entry.mood_rating || 0)
-                                ? "bg-primary group-hover:scale-x-125"
-                                : "bg-zinc-100"
-                            )}
-                          />
-                        ))}
-                      </div>
-                    </TableCell>
-                    <TableCell>
-                      {isFuture ? (
-                        <div className="flex items-center gap-2 px-3 py-1 bg-zinc-50 text-zinc-400 rounded-full border border-zinc-100 w-fit">
-                          <Lock className="h-3 w-3" />
-                          <span className="text-[10px] font-black uppercase tracking-widest">
-                            Locked
-                          </span>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-2 px-3 py-1 bg-green-50 text-green-700 rounded-full border border-green-100 w-fit">
-                          <Plus className="h-3 w-3" />
-                          <span className="text-[10px] font-black uppercase tracking-widest">
-                            Active
-                          </span>
-                        </div>
-                      )}
-                    </TableCell>
-                    <TableCell className="pr-10 text-right">
-                      <ChevronRight className="h-6 w-6 text-zinc-300 group-hover:text-primary group-hover:translate-x-2 transition-all opacity-0 group-hover:opacity-100" />
+                    <TableCell className="w-10">
+                      <ChevronRight className="h-4 w-4 text-zinc-200 group-hover:text-zinc-900 transition-colors" />
                     </TableCell>
                   </TableRow>
                 );
@@ -424,25 +493,6 @@ export default function DiaryPage() {
             )}
           </TableBody>
         </Table>
-      </div>
-
-      {/* Sub-page management instruction */}
-      <div className="p-8 bg-zinc-50 rounded-[2rem] border border-zinc-100 flex items-center justify-between group cursor-help transition-all hover:bg-white hover:shadow-xl">
-        <div className="flex items-center gap-6">
-          <div className="h-14 w-14 rounded-2xl bg-white border border-zinc-200 flex items-center justify-center shadow-sm">
-            <Tag className="h-7 w-7 text-zinc-400" />
-          </div>
-          <div>
-            <p className="text-xl font-black tracking-tight uppercase">
-              Nested Records
-            </p>
-            <p className="text-zinc-500 text-sm font-medium">
-              To add sub-pages, enter a primary record and use the Studio
-              controls.
-            </p>
-          </div>
-        </div>
-        <ArrowUpRight className="h-8 w-8 text-zinc-200 group-hover:text-primary transition-colors" />
       </div>
     </div>
   );

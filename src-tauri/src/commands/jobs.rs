@@ -30,3 +30,14 @@ pub async fn get_job_applications(
     let jobs = list_job_applications(pool).await?;
     Ok(jobs)
 }
+
+#[tauri::command]
+pub async fn get_job_application(
+    state: State<'_, SharedState>,
+    job_id: String,
+) -> Result<JobApplication, AppError> {
+    let state = state.lock().await;
+    let pool = &state.db;
+    let job = fetch_job_application(pool, &job_id).await?;
+    Ok(job)
+}

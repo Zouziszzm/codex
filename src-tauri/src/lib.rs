@@ -58,10 +58,16 @@ pub fn run() {
             crate::commands::diary::get_diary_sub_pages,
             crate::commands::habits::create_habit,
             crate::commands::habits::get_habits,
+            crate::commands::habits::get_today_habits,
+            crate::commands::habits::log_habit_completion,
+            crate::commands::habits::get_habit_analytics,
             crate::commands::goals::create_goal,
             crate::commands::goals::get_goals,
+            crate::commands::goals::get_goal,
             crate::commands::jobs::create_job_application,
             crate::commands::jobs::get_job_applications,
+            crate::commands::jobs::get_job_application,
+            crate::commands::habits::get_habit,
             crate::commands::dashboard::get_dashboard,
         ])
         .run(tauri::generate_context!())

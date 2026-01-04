@@ -1,40 +1,38 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useEffect, useState, useMemo, useCallback } from "react";
+import { safeInvoke } from "@/lib/tauri";
+import { useRouter } from "next/navigation";
 import {
-  Plus,
-  Activity,
   Flame,
   CheckCircle2,
-  AlertCircle,
-  Sparkles,
+  Plus,
+  TrendingUp,
+  Activity,
+  Info,
+  ChevronRight,
+  Circle,
 } from "lucide-react";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
-  Sheet,
-  SheetContent,
-  SheetDescription,
-  SheetHeader,
-  SheetTitle,
-  SheetTrigger,
-} from "@/components/ui/sheet";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts";
+import { cn } from "@/lib/utils";
+import { useToast, ToastContainer } from "@/components/ui/toast";
 
 interface Habit {
   habit_id: string;
@@ -45,241 +43,301 @@ interface Habit {
   habit_color: string | null;
   streak_current: number;
   streak_longest: number;
-  total_completions: number;
   completion_rate_30d: number;
+  consistency_index: number;
   habit_health_status: string | null;
 }
 
+interface AnalyticsPoint {
+  date: string;
+  rate: number;
+}
+
 export default function HabitsPage() {
+  const router = useRouter();
+  const { toast, toasts, removeToast } = useToast();
   const [habits, setHabits] = useState<Habit[]>([]);
   const [loading, setLoading] = useState(true);
-  const [isOpen, setIsOpen] = useState(false);
-  const [formData, setFormData] = useState({
-    habit_name: "",
-    habit_type: "boolean",
-    habit_description: "",
-    habit_icon_emoji: "✨",
-    habit_color: "#3b82f6",
-    schedule_type: "daily",
-  });
+  const [completionData, setCompletionData] = useState<AnalyticsPoint[]>([]);
 
-  const fetchHabits = async () => {
+  const todayStr = "2026-01-04";
+
+  const fetchData = useCallback(async () => {
     try {
-      const data = await invoke<Habit[]>("get_habits");
-      setHabits(data);
+      const allHabits = await safeInvoke<Habit[]>("get_habits");
+      setHabits(allHabits || []);
+
+      setCompletionData([]); // Remove mock trend
     } catch (err) {
       console.error("Failed to fetch habits:", err);
     } finally {
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    fetchHabits();
   }, []);
 
-  const handleCreate = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      await invoke("create_habit", {
-        input: {
-          ...formData,
-          habit_description: formData.habit_description || null,
-          habit_icon_emoji: formData.habit_icon_emoji || null,
-          habit_color: formData.habit_color || null,
-        },
-      });
-      setIsOpen(false);
-      fetchHabits();
-    } catch (err) {
-      console.error("Failed to create habit:", err);
-    }
-  };
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  const heatmapData = useMemo(() => {
+    return [] as { day: number; intensity: number }[]; // Remove mock heatmap
+  }, []);
 
   return (
-    <div className="p-8 space-y-8">
-      <div className="flex justify-between items-center">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight text-foreground">
+    <div className="space-y-12 animate-in fade-in duration-700">
+      <div className="flex items-center justify-between">
+        <div className="space-y-2">
+          <div className="flex items-center gap-2 text-zinc-400">
+            <Activity className="h-4 w-4" />
+            <span className="text-xs font-medium uppercase tracking-widest">
+              Behavioral Protocols
+            </span>
+          </div>
+          <h1 className="text-4xl font-bold tracking-tight text-zinc-900">
             Habits
           </h1>
-          <p className="text-muted-foreground mt-1">
-            Daily routines and consistency
-          </p>
         </div>
-        <Sheet open={isOpen} onOpenChange={setIsOpen}>
-          <SheetTrigger asChild>
-            <Button className="gap-2">
-              <Plus className="h-4 w-4" />
-              New Habit
-            </Button>
-          </SheetTrigger>
-          <SheetContent className="sm:max-w-md">
-            <SheetHeader>
-              <SheetTitle>Create New Habit</SheetTitle>
-              <SheetDescription>
-                Build a new consistent routine.
-              </SheetDescription>
-            </SheetHeader>
-            <form onSubmit={handleCreate} className="space-y-4 py-4">
-              <div className="space-y-2">
-                <Label htmlFor="name">Habit Name</Label>
-                <Input
-                  id="name"
-                  required
-                  value={formData.habit_name}
-                  onChange={(e) =>
-                    setFormData({ ...formData, habit_name: e.target.value })
-                  }
-                  placeholder="Morning Meditation..."
+        <Button
+          onClick={async () => {
+            try {
+              const newHabit = await safeInvoke<Habit>("create_habit", {
+                input: {
+                  habit_name: "New Protocol",
+                  habit_type: "boolean",
+                  habit_description: "Define your protocol objectives here.",
+                  habit_icon_emoji: "⚡",
+                  habit_color: "#18181b",
+                  schedule_type: "daily",
+                },
+              });
+              if (newHabit) {
+                toast({
+                  title: "Protocol Initialized",
+                  description: "New behavioral stream established.",
+                  variant: "success",
+                });
+                fetchData();
+              } else {
+                toast({
+                  title: "Execution Blocked",
+                  description:
+                    "Protocols can only be established in the desktop shell.",
+                  variant: "destructive",
+                });
+              }
+            } catch (err: unknown) {
+              const errorMessage =
+                err instanceof Error ? err.message : String(err);
+              toast({
+                title: "Setup Failed",
+                description: errorMessage,
+                variant: "destructive",
+              });
+            }
+          }}
+          className="h-10 px-6 rounded-xl font-bold uppercase tracking-widest text-[10px] gap-2"
+        >
+          <Plus className="h-4 w-4" />
+          Add Protocol
+        </Button>
+      </div>
+      <ToastContainer toasts={toasts} onRemove={removeToast} />
+
+      <div className="grid gap-8 lg:grid-cols-12">
+        <Card className="lg:col-span-8 border-none shadow-none bg-transparent">
+          <CardHeader className="px-0">
+            <CardTitle className="text-xl font-semibold flex items-center justify-between">
+              Monthly Velocity
+              <span className="text-xs font-normal text-zinc-400">
+                Global completion rate across all protocols
+              </span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-0 h-[240px]">
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={completionData}>
+                <defs>
+                  <linearGradient id="colorRate" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor="#18181b" stopOpacity={0.05} />
+                    <stop offset="95%" stopColor="#18181b" stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid
+                  strokeDasharray="3 3"
+                  vertical={false}
+                  stroke="#f0f0f0"
                 />
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="type">Habit Type</Label>
-                <Select
-                  value={formData.habit_type}
-                  onValueChange={(v) =>
-                    setFormData({ ...formData, habit_type: v })
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select type" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="boolean">
-                      Boolean (Done/Not Done)
-                    </SelectItem>
-                    <SelectItem value="quantitative">
-                      Quantitative (Numeric)
-                    </SelectItem>
-                    <SelectItem value="duration">Duration (Time)</SelectItem>
-                    <SelectItem value="checklist">Checklist</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label htmlFor="description">Description</Label>
-                <Input
-                  id="description"
-                  value={formData.habit_description}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      habit_description: e.target.value,
-                    })
-                  }
+                <XAxis dataKey="date" hide />
+                <YAxis hide domain={[0, 100]} />
+                <Tooltip
+                  contentStyle={{
+                    borderRadius: "8px",
+                    border: "none",
+                    boxShadow: "0 10px 15px -3px rgb(0 0 0 / 0.1)",
+                  }}
+                  labelStyle={{ fontWeight: "bold" }}
                 />
+                <Area
+                  type="monotone"
+                  dataKey="rate"
+                  stroke="#18181b"
+                  strokeWidth={2}
+                  fillOpacity={1}
+                  fill="url(#colorRate)"
+                />
+              </AreaChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+
+        <Card className="lg:col-span-4 border-none shadow-none bg-transparent">
+          <CardHeader className="px-0">
+            <CardTitle className="text-xl font-semibold">
+              Consistency Matrix
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="px-0">
+            <div className="grid grid-cols-7 gap-1.5">
+              {heatmapData.map((d) => (
+                <div
+                  key={d.day}
+                  className={cn(
+                    "aspect-square rounded-md transition-all",
+                    d.intensity > 0.8
+                      ? "bg-zinc-900"
+                      : d.intensity > 0.5
+                      ? "bg-zinc-400"
+                      : d.intensity > 0.2
+                      ? "bg-zinc-100"
+                      : "bg-zinc-50/50"
+                  )}
+                  title={`Day ${d.day}: ${(d.intensity * 100).toFixed(0)}%`}
+                />
+              ))}
+            </div>
+            <div className="mt-4 flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-zinc-300">
+              <span>Less</span>
+              <div className="flex gap-1">
+                <div className="h-2 w-2 rounded-sm bg-zinc-50" />
+                <div className="h-2 w-2 rounded-sm bg-zinc-100" />
+                <div className="h-2 w-2 rounded-sm bg-zinc-400" />
+                <div className="h-2 w-2 rounded-sm bg-zinc-900" />
               </div>
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="emoji">Icon Emoji</Label>
-                  <Input
-                    id="emoji"
-                    value={formData.habit_icon_emoji}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        habit_icon_emoji: e.target.value,
-                      })
-                    }
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="color">Color</Label>
-                  <Input
-                    id="color"
-                    type="color"
-                    className="h-10 px-1 py-1"
-                    value={formData.habit_color}
-                    onChange={(e) =>
-                      setFormData({ ...formData, habit_color: e.target.value })
-                    }
-                  />
-                </div>
-              </div>
-              <Button type="submit" className="w-full">
-                Create Habit
-              </Button>
-            </form>
-          </SheetContent>
-        </Sheet>
+              <span>More</span>
+            </div>
+          </CardContent>
+        </Card>
       </div>
 
-      <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-        {loading ? (
-          Array.from({ length: 3 }).map((_, i) => (
-            <Card key={i} className="animate-pulse">
-              <CardHeader className="h-24 bg-secondary/50" />
-              <CardContent className="h-12" />
-            </Card>
-          ))
-        ) : habits.length === 0 ? (
-          <div className="col-span-full h-48 flex flex-col items-center justify-center text-muted-foreground border-2 border-dashed rounded-lg">
-            <Sparkles className="h-8 w-8 mb-2 opacity-20" />
-            <p>No habits tracked yet. Start build your first one!</p>
-          </div>
-        ) : (
-          habits.map((habit) => (
-            <Card key={habit.habit_id} className="overflow-hidden">
+      <div className="space-y-6 pt-12 border-t border-zinc-100">
+        <h2 className="text-xl font-semibold tracking-tight">
+          Active Protocols
+        </h2>
+        <div className="grid gap-4">
+          {loading ? (
+            <div className="h-40 border-2 border-dashed border-zinc-100 rounded-3xl flex items-center justify-center italic text-zinc-300">
+              Initializing behavioral stream...
+            </div>
+          ) : (
+            habits.map((habit) => (
               <div
-                className="h-1.5"
-                style={{
-                  backgroundColor: habit.habit_color || "var(--primary)",
-                }}
-              />
-              <CardHeader>
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <span className="text-2xl">
-                      {habit.habit_icon_emoji || "✨"}
-                    </span>
-                    <div>
-                      <CardTitle className="text-lg">
-                        {habit.habit_name}
-                      </CardTitle>
-                      <CardDescription className="line-clamp-1 italic text-xs">
-                        {habit.habit_description || "No description provided"}
-                      </CardDescription>
-                    </div>
-                  </div>
-                  {habit.habit_health_status === "healthy" ? (
-                    <CheckCircle2 className="h-5 w-5 text-green-500" />
+                key={habit.habit_id}
+                className="group flex items-center gap-6 p-6 rounded-[2rem] border border-zinc-100 hover:border-zinc-300 transition-all bg-zinc-50/10"
+              >
+                <div className="flex items-center justify-center h-12 w-12 rounded-2xl bg-white border border-zinc-100 shadow-sm transition-transform group-hover:scale-110">
+                  {habit.habit_icon_emoji ? (
+                    <span className="text-2xl">{habit.habit_icon_emoji}</span>
                   ) : (
-                    <AlertCircle className="h-5 w-5 text-yellow-500" />
+                    <Circle className="h-6 w-6 text-zinc-200" />
                   )}
                 </div>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="flex justify-between text-sm">
-                  <div className="flex items-center gap-1.5">
-                    <Flame className="h-4 w-4 text-orange-500" />
-                    <span className="font-semibold">
+
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-lg font-bold text-zinc-900 uppercase tracking-tight">
+                      {habit.habit_name}
+                    </h3>
+                    <div className="px-2 py-0.5 bg-zinc-100 rounded-full text-[10px] font-bold text-zinc-400 uppercase tracking-tighter">
                       {habit.streak_current} Day Streak
-                    </span>
+                    </div>
                   </div>
-                  <div className="text-muted-foreground">
-                    Best: {habit.streak_longest}
+                  <p className="text-sm text-zinc-500 line-clamp-1">
+                    {habit.habit_description ||
+                      "Maintain peak performance through consistent execution."}
+                  </p>
+                </div>
+
+                <div className="flex items-center gap-6">
+                  <div className="text-right hidden md:block">
+                    <div className="text-lg font-black">
+                      {(habit.consistency_index * 100).toFixed(0)}%
+                    </div>
+                    <div className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest">
+                      Consistency
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      className="h-10 w-10 rounded-xl border-zinc-200 hover:bg-zinc-900 hover:text-white transition-all"
+                    >
+                      <CheckCircle2 className="h-5 w-5" />
+                    </Button>
+
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-10 w-10 rounded-xl hover:bg-zinc-100"
+                        >
+                          <Info className="h-4 w-4 text-zinc-400" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent
+                        align="end"
+                        className="w-56 font-sans"
+                      >
+                        <DropdownMenuLabel className="text-[10px] uppercase tracking-widest text-zinc-400">
+                          Analytics
+                        </DropdownMenuLabel>
+                        <DropdownMenuItem className="flex justify-between">
+                          <span className="text-xs">30d Completion</span>
+                          <span className="text-xs font-bold">
+                            {(habit.completion_rate_30d * 100).toFixed(0)}%
+                          </span>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem className="flex justify-between">
+                          <span className="text-xs">Current Streak</span>
+                          <span className="text-xs font-bold">
+                            {habit.streak_current} days
+                          </span>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem className="flex justify-between">
+                          <span className="text-xs">Longest Streak</span>
+                          <span className="text-xs font-bold">
+                            {habit.streak_longest} days
+                          </span>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          onClick={() =>
+                            router.push(`/habits/${habit.habit_id}`)
+                          }
+                          className="text-blue-500 font-bold gap-2"
+                        >
+                          <span className="text-xs">Deep Insights</span>
+                          <ChevronRight className="h-3 w-3" />
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                   </div>
                 </div>
-                <div className="space-y-1.5">
-                  <div className="flex justify-between text-xs">
-                    <span>Consistency (30d)</span>
-                    <span>{(habit.completion_rate_30d * 100).toFixed(0)}%</span>
-                  </div>
-                  <div className="h-1.5 w-full bg-secondary rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-primary transition-all"
-                      style={{ width: `${habit.completion_rate_30d * 100}%` }}
-                    />
-                  </div>
-                </div>
-                <Button variant="outline" className="w-full h-8 text-sm">
-                  Check In
-                </Button>
-              </CardContent>
-            </Card>
-          ))
-        )}
+              </div>
+            ))
+          )}
+        </div>
       </div>
     </div>
   );

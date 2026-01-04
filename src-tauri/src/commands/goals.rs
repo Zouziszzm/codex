@@ -26,3 +26,14 @@ pub async fn get_goals(state: State<'_, SharedState>) -> Result<Vec<Goal>, AppEr
     let goals = list_goals(pool).await?;
     Ok(goals)
 }
+
+#[tauri::command]
+pub async fn get_goal(
+    state: State<'_, SharedState>,
+    goal_id: String,
+) -> Result<Goal, AppError> {
+    let state = state.lock().await;
+    let pool = &state.db;
+    let goal = fetch_goal(pool, &goal_id).await?;
+    Ok(goal)
+}

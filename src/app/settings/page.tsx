@@ -1,6 +1,6 @@
 "use client";
 
-import { Settings, User, Bell, Shield, Database } from "lucide-react";
+import { User, Bell, Database } from "lucide-react";
 import {
   Card,
   CardContent,

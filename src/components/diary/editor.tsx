@@ -6,7 +6,7 @@ import "@blocknote/mantine/style.css";
 import { useCreateBlockNote } from "@blocknote/react";
 import { MantineProvider } from "@mantine/core";
 import "@mantine/core/styles.css";
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 
 interface EditorProps {
   initialContent?: string;
@@ -19,8 +19,6 @@ export default function NocturneEditor({
   onChange,
   editable = true,
 }: EditorProps) {
-  const [contentLoaded, setContentLoaded] = useState(false);
-
   // Initialize the editor with robust content validation
   const editor = useCreateBlockNote({
     initialContent: (() => {
